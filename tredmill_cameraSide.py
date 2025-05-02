@@ -170,3 +170,5 @@ finally:
     cap.release()
     cv2.destroyAllWindows()
     print("프로그램이 안전하게 종료됨")
+
+# 중앙에 위치했을 때에는 안움직이는 게 아니라, 천천히 중앙으로 움직이면 좋겠음
