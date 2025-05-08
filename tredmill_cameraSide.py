@@ -12,29 +12,35 @@ ANGLE_PER_SECTOR = 360 / MOTOR_STEPS  # 각 구역당 각도
 DETECTION_CONFIDENCE = 0.5  # YOLO 탐지 신뢰도 임계값
 TARGET_CLASS = 67  # Cell Phone 클래스 ID
 
-# --- Helper functions for grid and direction ---
-def draw_grid(frame):
-    h, w, _ = frame.shape
-    step_x = w // 3
-    step_y = h // 3
-
-    for i in range(1, 3):
-        cv2.line(frame, (step_x * i, 0), (step_x * i, h), (255, 255, 255), 1)
-        cv2.line(frame, (0, step_y * i), (w, step_y * i), (255, 255, 255), 1)
-
-def get_direction(cx, cy, w, h):
-    col = cx // (w // 3)
-    row = cy // (h // 3)
-    grid_index = int(row * 3 + col)
-
-    directions = {
-        0: "down-right", 1: "down",     2: "down-left",
-        3: "right",      4: "center",   5: "left",
-        6: "up-right",   7: "up",       8: "up-left"
-    }
-    return directions.get(grid_index, "unknown")
-
 # --- Helper functions for vector direction ---
+def draw_sector_grid(frame):
+    """
+    화면에 모터 스텝 수에 따른 구역 그리드를 그립니다.
+    """
+    h, w = frame.shape[:2]
+    center = (w//2, h//2)
+    radius = min(w, h) // 2 - 50  # 화면 크기에 맞게 반지름 조정
+    
+    # 중심점 그리기
+    cv2.circle(frame, center, 5, (255, 255, 255), -1)
+    
+    # 각 구역의 경계선 그리기
+    for i in range(MOTOR_STEPS):
+        angle = i * ANGLE_PER_SECTOR
+        rad = math.radians(angle)
+        end_x = int(center[0] + radius * math.cos(rad))
+        end_y = int(center[1] - radius * math.sin(rad))
+        
+        # 구역 경계선
+        cv2.line(frame, center, (end_x, end_y), (100, 100, 100), 1)
+        
+        # 구역 번호 표시
+        text_radius = radius - 30
+        text_x = int(center[0] + text_radius * math.cos(rad))
+        text_y = int(center[1] - text_radius * math.sin(rad))
+        cv2.putText(frame, str(i), (text_x-10, text_y+5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+
 def calculate_vector_direction(start_point, end_point):
     """
     두 점 사이의 벡터 방향을 계산합니다.
@@ -153,6 +159,9 @@ try:
         if not ret:
             continue
 
+        # 구역 그리드 그리기
+        draw_sector_grid(frame)
+
         # YOLO 탐지
         results = model(frame, imgsz=640)
         detections = []
@@ -184,24 +193,6 @@ try:
                     draw_tracking_info(frame, [x1, y1, x2, y2], obj_id, angle, sector)
                     print(f"Object {obj_id} - Angle: {angle:.1f}°, Sector: {sector}")
                     
-                except ValueError as e:
-                    print(f"ValueError: {e}, Data: {obj}")
-
-        # --- Draw grid and show direction arrows ---
-        h, w, _ = frame.shape
-        draw_grid(frame)
-
-        if tracked_objects is not None and len(tracked_objects) > 0:
-            for obj in tracked_objects:
-                try:
-                    x1, y1, x2, y2, obj_id = map(int, obj)
-                    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2  # 중심 좌표
-
-                    direction = get_direction(cx, cy, w, h)
-                    print(f"Object {obj_id} 이동 방향: {direction}")
-
-                    cv2.arrowedLine(frame, (cx, cy), (w//2, h//2), (0, 0, 255), 2, tipLength=0.3)
-                    cv2.circle(frame, (cx, cy), 5, (255, 0, 0), -1)
                 except ValueError as e:
                     print(f"ValueError: {e}, Data: {obj}")
 
