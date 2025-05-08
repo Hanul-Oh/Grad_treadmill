@@ -4,7 +4,13 @@ import torch
 from ultralytics import YOLO
 import time
 from filterpy.kalman import KalmanFilter
+import math
 
+# --- Constants ---
+MOTOR_STEPS = 30  # 모터의 총 스텝 수
+ANGLE_PER_SECTOR = 360 / MOTOR_STEPS  # 각 구역당 각도
+DETECTION_CONFIDENCE = 0.5  # YOLO 탐지 신뢰도 임계값
+TARGET_CLASS = 67  # Cell Phone 클래스 ID
 
 # --- Helper functions for grid and direction ---
 def draw_grid(frame):
@@ -28,6 +34,44 @@ def get_direction(cx, cy, w, h):
     }
     return directions.get(grid_index, "unknown")
 
+# --- Helper functions for vector direction ---
+def calculate_vector_direction(start_point, end_point):
+    """
+    두 점 사이의 벡터 방향을 계산합니다.
+    최적화: atan2 함수를 한 번만 호출하고, 불필요한 연산 제거
+    """
+    dx = end_point[0] - start_point[0]
+    dy = end_point[1] - start_point[1]
+    angle = math.degrees(math.atan2(-dy, dx))
+    return angle if angle >= 0 else angle + 360
+
+def get_sector(angle):
+    """
+    주어진 각도에 해당하는 구역 번호를 반환합니다.
+    최적화: 나눗셈 연산을 한 번만 수행
+    """
+    return int(angle / ANGLE_PER_SECTOR) % MOTOR_STEPS
+
+def draw_tracking_info(frame, bbox, obj_id, angle, sector):
+    """
+    화면에 트래킹 정보를 그립니다.
+    최적화: 문자열 포맷팅을 한 번만 수행
+    """
+    x1, y1, x2, y2 = map(int, bbox)
+    center_x = (x1 + x2) // 2
+    center_y = (y1 + y2) // 2
+    h, w = frame.shape[:2]
+    
+    # 박스 그리기
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+    
+    # 벡터 그리기
+    cv2.arrowedLine(frame, (center_x, center_y), (w//2, h//2), (0, 0, 255), 2, tipLength=0.3)
+    
+    # 정보 텍스트
+    info_text = f"ID: {obj_id} | Angle: {angle:.1f}° | Sector: {sector}"
+    cv2.putText(frame, info_text, (x1, y1 - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
 class KalmanBoxTracker:
     count = 0
@@ -102,7 +146,6 @@ model = YOLO('yolov8s.pt', verbose=False)
 model.model.to('cpu')
 tracker = Sort(max_age=2.0, iou_threshold=0.3)
 cap = cv2.VideoCapture(0)
-TARGET_CLASS = 67  # Cell Phone
 
 try:
     while True:
@@ -115,28 +158,34 @@ try:
         detections = []
 
         for result in results:
-            for box in result.boxes.data.tolist():
-                x1, y1, x2, y2, conf, cls_id = box
-                if conf >= 0.5 and int(cls_id) == TARGET_CLASS:
-                    detections.append([x1, y1, x2, y2])
-
-        print(f"Detections: {detections}")  # 디버깅 로그 추가
+            boxes = result.boxes.data.tolist()
+            # 필터링을 한 번에 수행
+            detections = [[x1, y1, x2, y2] for x1, y1, x2, y2, conf, cls_id in boxes 
+                         if conf >= DETECTION_CONFIDENCE and int(cls_id) == TARGET_CLASS]
 
         # SORT로 트래킹 업데이트
         tracked_objects = tracker.update(np.array(detections) if detections else np.empty((0, 4)))
 
-        print(f"Tracked Objects: {tracked_objects}")  # 디버깅 로그 추가
-
         # 트래킹된 휴대폰 표시
         if tracked_objects is not None and len(tracked_objects) > 0:
+            h, w = frame.shape[:2]
+            center_point = (w//2, h//2)
+            
             for obj in tracked_objects:
                 try:
                     x1, y1, x2, y2, obj_id = map(int, obj)
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(frame, f"Phone ID: {obj_id}", (x1, y1 - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                    start_point = ((x1 + x2) // 2, (y1 + y2) // 2)
+                    
+                    # 벡터 방향 계산
+                    angle = calculate_vector_direction(start_point, center_point)
+                    sector = get_sector(angle)
+                    
+                    # 정보 표시
+                    draw_tracking_info(frame, [x1, y1, x2, y2], obj_id, angle, sector)
+                    print(f"Object {obj_id} - Angle: {angle:.1f}°, Sector: {sector}")
+                    
                 except ValueError as e:
-                    print(f"ValueError: {e}, Data: {obj}")  # 값 변환 오류 확인용
+                    print(f"ValueError: {e}, Data: {obj}")
 
         # --- Draw grid and show direction arrows ---
         h, w, _ = frame.shape
