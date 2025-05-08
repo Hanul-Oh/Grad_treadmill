@@ -5,12 +5,36 @@ from ultralytics import YOLO
 import time
 from filterpy.kalman import KalmanFilter
 import math
+import serial
 
 # --- Constants ---
 MOTOR_STEPS = 6  # 모터의 총 스텝 수
 ANGLE_PER_SECTOR = 360 / MOTOR_STEPS  # 각 구역당 각도
 DETECTION_CONFIDENCE = 0.5  # YOLO 탐지 신뢰도 임계값
 TARGET_CLASS = 67  # Cell Phone 클래스 ID
+
+# 시리얼 포트 설정
+ser = serial.Serial(
+    port='COM6',  # windows 기준
+    baudrate=115200,
+    bytesize=serial.EIGHTBITS,
+    parity=serial.PARITY_NONE,
+    stopbits=serial.STOPBITS_ONE,
+    timeout=1
+)
+
+def send_sector(sector):
+    """
+    현재 구역 번호를 STM32로 전송합니다.
+    
+    Parameters:
+        sector: int - 전송할 구역 번호
+    """
+    try:
+        ser.write(str(sector).encode())
+        time.sleep(0.1)  # 잠시 대기
+    except Exception as e:
+        print(f"시리얼 통신 오류: {e}")
 
 # --- Helper functions for vector direction ---
 def draw_sector_grid(frame):
@@ -328,6 +352,9 @@ try:
                     draw_tracking_info(frame, [x1, y1, x2, y2], obj_id, angle, sector)
                     print(f"Object {obj_id} - Angle: {angle:.1f}°, Sector: {sector}")
                     
+                    # 현재 구역 번호를 STM32로 전송
+                    send_sector(sector)
+                    
                 except ValueError as e:
                     print(f"ValueError: {e}, Data: {obj}")
 
@@ -344,5 +371,6 @@ except Exception as e:
 finally:
     cap.release()
     cv2.destroyAllWindows()
+    ser.close()  # 시리얼 포트 닫기
     print("프로그램이 안전하게 종료됨")
 
