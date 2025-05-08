@@ -7,7 +7,7 @@ from filterpy.kalman import KalmanFilter
 import math
 
 # --- Constants ---
-MOTOR_STEPS = 30  # 모터의 총 스텝 수
+MOTOR_STEPS = 6  # 모터의 총 스텝 수
 ANGLE_PER_SECTOR = 360 / MOTOR_STEPS  # 각 구역당 각도
 DETECTION_CONFIDENCE = 0.5  # YOLO 탐지 신뢰도 임계값
 TARGET_CLASS = 67  # Cell Phone 클래스 ID
@@ -15,54 +15,22 @@ TARGET_CLASS = 67  # Cell Phone 클래스 ID
 # --- Helper functions for vector direction ---
 def draw_sector_grid(frame):
     """
-    화면에 모터 스텝 수에 따른 구역 그리드를 그립니다.
+    화면에 모터 스텝 수에 따른 구역 번호를 표시합니다.
     
     Parameters:
-        frame: numpy.ndarray - 그리드를 그릴 이미지 프레임
+        frame: numpy.ndarray - 구역 번호를 표시할 이미지 프레임
     """
     h, w = frame.shape[:2]
-    center = (w//2, h//2)
-    radius = min(w, h) // 2 - 50  # 화면 크기에 맞게 반지름 조정
     
-    # 중심점 그리기
-    # cv2.circle(image, center, radius, color, thickness)
-    # image: 그릴 이미지
-    # center: 원의 중심점 (x, y) 좌표
-    # radius: 원의 반지름
-    # color: 원의 색상 (B, G, R) 형식
-    # thickness: 선의 두께 (-1이면 채워진 원)
-    cv2.circle(frame, center, 5, (255, 255, 255), -1)
+    # 각 구역의 높이 계산
+    sector_height = h / MOTOR_STEPS
     
-    # 각 구역의 경계선 그리기
+    # 구역 번호 표시
     for i in range(MOTOR_STEPS):
-        angle = i * ANGLE_PER_SECTOR
-        rad = math.radians(angle)
-        end_x = int(center[0] + radius * math.cos(rad))
-        end_y = int(center[1] - radius * math.sin(rad))
-        
-        # 구역 경계선
-        # cv2.line(image, start_point, end_point, color, thickness)
-        # image: 그릴 이미지
-        # start_point: 선의 시작점 (x, y) 좌표
-        # end_point: 선의 끝점 (x, y) 좌표
-        # color: 선의 색상 (B, G, R) 형식
-        # thickness: 선의 두께
-        cv2.line(frame, center, (end_x, end_y), (100, 100, 100), 1)
-        
-        # 구역 번호 표시
-        text_radius = radius - 30
-        text_x = int(center[0] + text_radius * math.cos(rad))
-        text_y = int(center[1] - text_radius * math.sin(rad))
-        # cv2.putText(image, text, position, font, scale, color, thickness)
-        # image: 텍스트를 그릴 이미지
-        # text: 표시할 텍스트
-        # position: 텍스트의 시작 위치 (x, y) 좌표
-        # font: 폰트 종류
-        # scale: 폰트 크기
-        # color: 텍스트 색상 (B, G, R) 형식
-        # thickness: 텍스트 두께
-        cv2.putText(frame, str(i), (text_x-10, text_y+5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+        # 구역의 중앙 y좌표 계산
+        text_y = int(i * sector_height + sector_height/2)
+        cv2.putText(frame, str(i), (10, text_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
 
 def calculate_vector_direction(start_point, end_point):
     """
@@ -74,12 +42,13 @@ def calculate_vector_direction(start_point, end_point):
         end_point: tuple - 벡터의 끝점 (x, y) 좌표
     
     Returns:
-        float: 벡터의 각도 (0-360도)
+        float: 벡터의 각도 (0-360도, 위쪽이 0도)
     """
     dx = end_point[0] - start_point[0]
     dy = end_point[1] - start_point[1]
-    angle = math.degrees(math.atan2(-dy, dx))
-    return angle if angle >= 0 else angle + 360
+    # atan2 결과에 90도를 더하고 360으로 나눈 나머지를 구하여 위쪽을 0도로 설정
+    angle = (math.degrees(math.atan2(-dy, dx)) + 90) % 360
+    return angle
 
 def get_sector(angle):
     """
@@ -92,7 +61,9 @@ def get_sector(angle):
     Returns:
         int: 해당하는 구역 번호 (0 ~ MOTOR_STEPS-1)
     """
-    return int(angle / ANGLE_PER_SECTOR) % MOTOR_STEPS
+    # 각도를 구역 크기로 나누고 반올림하여 구역 번호 계산
+    # 위쪽(0도)이 0구역이 되도록 조정
+    return int((angle + ANGLE_PER_SECTOR/2) / ANGLE_PER_SECTOR) % MOTOR_STEPS
 
 def draw_tracking_info(frame, bbox, obj_id, angle, sector):
     """
@@ -112,22 +83,9 @@ def draw_tracking_info(frame, bbox, obj_id, angle, sector):
     h, w = frame.shape[:2]
     
     # 박스 그리기
-    # cv2.rectangle(image, start_point, end_point, color, thickness)
-    # image: 그릴 이미지
-    # start_point: 사각형의 좌상단 (x, y) 좌표
-    # end_point: 사각형의 우하단 (x, y) 좌표
-    # color: 사각형의 색상 (B, G, R) 형식
-    # thickness: 선의 두께
     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
     
     # 벡터 그리기
-    # cv2.arrowedLine(image, start_point, end_point, color, thickness, tipLength)
-    # image: 그릴 이미지
-    # start_point: 화살표의 시작점 (x, y) 좌표
-    # end_point: 화살표의 끝점 (x, y) 좌표
-    # color: 화살표의 색상 (B, G, R) 형식
-    # thickness: 선의 두께
-    # tipLength: 화살표 머리의 길이 (전체 길이의 비율)
     cv2.arrowedLine(frame, (center_x, center_y), (w//2, h//2), (0, 0, 255), 2, tipLength=0.3)
     
     # 정보 텍스트
