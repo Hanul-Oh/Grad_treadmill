@@ -16,12 +16,21 @@ TARGET_CLASS = 67  # Cell Phone 클래스 ID
 def draw_sector_grid(frame):
     """
     화면에 모터 스텝 수에 따른 구역 그리드를 그립니다.
+    
+    Parameters:
+        frame: numpy.ndarray - 그리드를 그릴 이미지 프레임
     """
     h, w = frame.shape[:2]
     center = (w//2, h//2)
     radius = min(w, h) // 2 - 50  # 화면 크기에 맞게 반지름 조정
     
     # 중심점 그리기
+    # cv2.circle(image, center, radius, color, thickness)
+    # image: 그릴 이미지
+    # center: 원의 중심점 (x, y) 좌표
+    # radius: 원의 반지름
+    # color: 원의 색상 (B, G, R) 형식
+    # thickness: 선의 두께 (-1이면 채워진 원)
     cv2.circle(frame, center, 5, (255, 255, 255), -1)
     
     # 각 구역의 경계선 그리기
@@ -32,12 +41,26 @@ def draw_sector_grid(frame):
         end_y = int(center[1] - radius * math.sin(rad))
         
         # 구역 경계선
+        # cv2.line(image, start_point, end_point, color, thickness)
+        # image: 그릴 이미지
+        # start_point: 선의 시작점 (x, y) 좌표
+        # end_point: 선의 끝점 (x, y) 좌표
+        # color: 선의 색상 (B, G, R) 형식
+        # thickness: 선의 두께
         cv2.line(frame, center, (end_x, end_y), (100, 100, 100), 1)
         
         # 구역 번호 표시
         text_radius = radius - 30
         text_x = int(center[0] + text_radius * math.cos(rad))
         text_y = int(center[1] - text_radius * math.sin(rad))
+        # cv2.putText(image, text, position, font, scale, color, thickness)
+        # image: 텍스트를 그릴 이미지
+        # text: 표시할 텍스트
+        # position: 텍스트의 시작 위치 (x, y) 좌표
+        # font: 폰트 종류
+        # scale: 폰트 크기
+        # color: 텍스트 색상 (B, G, R) 형식
+        # thickness: 텍스트 두께
         cv2.putText(frame, str(i), (text_x-10, text_y+5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
 
@@ -45,6 +68,13 @@ def calculate_vector_direction(start_point, end_point):
     """
     두 점 사이의 벡터 방향을 계산합니다.
     최적화: atan2 함수를 한 번만 호출하고, 불필요한 연산 제거
+    
+    Parameters:
+        start_point: tuple - 벡터의 시작점 (x, y) 좌표
+        end_point: tuple - 벡터의 끝점 (x, y) 좌표
+    
+    Returns:
+        float: 벡터의 각도 (0-360도)
     """
     dx = end_point[0] - start_point[0]
     dy = end_point[1] - start_point[1]
@@ -55,6 +85,12 @@ def get_sector(angle):
     """
     주어진 각도에 해당하는 구역 번호를 반환합니다.
     최적화: 나눗셈 연산을 한 번만 수행
+    
+    Parameters:
+        angle: float - 계산된 벡터의 각도 (0-360도)
+    
+    Returns:
+        int: 해당하는 구역 번호 (0 ~ MOTOR_STEPS-1)
     """
     return int(angle / ANGLE_PER_SECTOR) % MOTOR_STEPS
 
@@ -62,6 +98,13 @@ def draw_tracking_info(frame, bbox, obj_id, angle, sector):
     """
     화면에 트래킹 정보를 그립니다.
     최적화: 문자열 포맷팅을 한 번만 수행
+    
+    Parameters:
+        frame: numpy.ndarray - 정보를 그릴 이미지 프레임
+        bbox: list - 바운딩 박스 좌표 [x1, y1, x2, y2]
+        obj_id: int - 트래킹 중인 객체의 ID
+        angle: float - 계산된 벡터의 각도
+        sector: int - 계산된 구역 번호
     """
     x1, y1, x2, y2 = map(int, bbox)
     center_x = (x1 + x2) // 2
@@ -69,9 +112,22 @@ def draw_tracking_info(frame, bbox, obj_id, angle, sector):
     h, w = frame.shape[:2]
     
     # 박스 그리기
+    # cv2.rectangle(image, start_point, end_point, color, thickness)
+    # image: 그릴 이미지
+    # start_point: 사각형의 좌상단 (x, y) 좌표
+    # end_point: 사각형의 우하단 (x, y) 좌표
+    # color: 사각형의 색상 (B, G, R) 형식
+    # thickness: 선의 두께
     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
     
     # 벡터 그리기
+    # cv2.arrowedLine(image, start_point, end_point, color, thickness, tipLength)
+    # image: 그릴 이미지
+    # start_point: 화살표의 시작점 (x, y) 좌표
+    # end_point: 화살표의 끝점 (x, y) 좌표
+    # color: 화살표의 색상 (B, G, R) 형식
+    # thickness: 선의 두께
+    # tipLength: 화살표 머리의 길이 (전체 길이의 비율)
     cv2.arrowedLine(frame, (center_x, center_y), (w//2, h//2), (0, 0, 255), 2, tipLength=0.3)
     
     # 정보 텍스트
