@@ -136,71 +136,192 @@ def draw_tracking_info(frame, bbox, obj_id, angle, sector):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
 class KalmanBoxTracker:
+    # 클래스 변수: 모든 인스턴스가 공유하는 트래커 ID 카운터
     count = 0
 
     def __init__(self, bbox):
+        """
+        칼만 필터 기반 박스 트래커 초기화
+        
+        Parameters:
+            bbox: list - 초기 바운딩 박스 좌표 [x1, y1, x2, y2]
+        """
+        # 현재 트래커에 고유 ID 할당
         self.id = KalmanBoxTracker.count
+        # 다음 트래커를 위한 ID 증가
         KalmanBoxTracker.count += 1
+        
+        # 칼만 필터 초기화
+        # dim_x=7: 상태 벡터 차원 (위치 4개 + 속도 3개)
+        # dim_z=4: 측정 벡터 차원 (바운딩 박스 좌표 4개)
         self.kf = KalmanFilter(dim_x=7, dim_z=4)
+        
+        # 상태 전이 행렬 설정 (7x7 단위 행렬)
+        # 물체의 움직임을 예측하는데 사용
         self.kf.F = np.eye(7)
+        
+        # 측정 행렬 설정 (4x7 단위 행렬)
+        # 실제 측정값과 상태 벡터를 연결
         self.kf.H = np.eye(4, 7)
+        
+        # 공분산 행렬 초기화 (7x7)
+        # 예측의 불확실성을 나타내는 행렬
+        # 큰 값으로 초기화하여 초기 예측의 불확실성 반영
         self.kf.P *= 1000
+        
+        # 측정 노이즈 공분산 행렬 설정 (4x4)
+        # 센서(YOLO)의 측정 오차를 나타냄
         self.kf.R *= 10
+        
+        # 프로세스 노이즈 공분산 행렬 설정 (7x7)
+        # 물체 움직임의 불확실성을 나타냄
         self.kf.Q *= 5
+        
+        # 초기 상태 벡터 설정
+        # 바운딩 박스의 초기 위치를 상태 벡터의 처음 4개 요소에 할당
         self.kf.x[:4] = np.array([[bbox[0]], [bbox[1]], [bbox[2]], [bbox[3]]])
+        
+        # 마지막 업데이트 이후 경과 프레임 수
+        # 물체가 얼마나 오래 감지되지 않았는지 추적
         self.time_since_update = 0
+        
+        # 마지막 업데이트 시간 기록
+        # 물체의 추적 지속 시간을 계산하는데 사용
         self.last_update = time.time()
 
     def predict(self):
+        """
+        다음 프레임에서의 물체 위치를 예측
+        
+        Returns:
+            numpy.ndarray: 예측된 바운딩 박스 좌표 [x1, y1, x2, y2]
+        """
+        # 칼만 필터를 사용하여 다음 상태 예측
         self.kf.predict()
+        
+        # 업데이트 없이 경과한 프레임 수 증가
         self.time_since_update += 1
+        
+        # 예측된 상태 벡터에서 바운딩 박스 좌표만 추출하여 반환
+        # flatten()을 사용하여 1차원 배열로 변환
         return self.kf.x[:4].flatten()
 
     def update(self, bbox):
+        """
+        새로운 측정값으로 예측을 보정
+        
+        Parameters:
+            bbox: list - 새로운 바운딩 박스 좌표 [x1, y1, x2, y2]
+        """
+        # 새로운 측정값으로 칼만 필터 업데이트
+        # 바운딩 박스 좌표를 2차원 배열로 변환하여 입력
         self.kf.update(np.array([[bbox[0]], [bbox[1]], [bbox[2]], [bbox[3]]]))
+        
+        # 업데이트 이후 경과 프레임 수 초기화
         self.time_since_update = 0
+        
+        # 마지막 업데이트 시간 갱신
         self.last_update = time.time()
 
-
 class Sort:
+    """
+    Simple Online and Realtime Tracking (SORT) 알고리즘 구현
+    칼만 필터와 IOU 기반의 실시간 다중 객체 추적 알고리즘
+    """
     def __init__(self, max_age=2.0, iou_threshold=0.3):
+        """
+        SORT 트래커 초기화
+        
+        Parameters:
+            max_age: float - 트래커가 업데이트 없이 유지될 수 있는 최대 시간(초)
+            iou_threshold: float - 두 박스가 같은 객체로 간주되는 최소 IOU 값
+        """
+        # 현재 추적 중인 모든 트래커 객체들의 리스트
         self.trackers = []
-        self.max_age = max_age  # 최대 트래커 수명 (초)
+        # 트래커의 최대 수명 (초 단위)
+        self.max_age = max_age
+        # IOU 임계값 (이 값보다 큰 IOU를 가진 박스들은 같은 객체로 간주)
         self.iou_threshold = iou_threshold
 
     def iou(self, box1, box2):
+        """
+        두 바운딩 박스 간의 Intersection over Union (IOU) 계산
+        
+        Parameters:
+            box1: list - 첫 번째 바운딩 박스 [x1, y1, x2, y2]
+            box2: list - 두 번째 바운딩 박스 [x1, y1, x2, y2]
+            
+        Returns:
+            float: 두 박스의 IOU 값 (0~1 사이)
+        """
+        # 첫 번째 박스의 좌표 추출
         x1, y1, x2, y2 = box1
+        # 두 번째 박스의 좌표 추출
         x1g, y1g, x2g, y2g = box2
+        
+        # 교차 영역의 좌표 계산
         xi1, yi1, xi2, yi2 = max(x1, x1g), max(y1, y1g), min(x2, x2g), min(y2, y2g)
+        
+        # 교차 영역의 넓이 계산 (음수인 경우 0으로 처리)
         inter_area = max(0, xi2 - xi1) * max(0, yi2 - yi1)
+        
+        # 각 박스의 넓이 계산
         box1_area = (x2 - x1) * (y2 - y1)
         box2_area = (x2g - x1g) * (y2g - y1g)
+        
+        # IOU 계산 (교차 영역 / 합집합 영역)
+        # 1e-6을 더해서 0으로 나누는 것을 방지
         return inter_area / float(box1_area + box2_area - inter_area + 1e-6)
 
     def update(self, detections):
+        """
+        새로운 탐지 결과로 트래커 업데이트
+        
+        Parameters:
+            detections: numpy.ndarray - YOLO가 탐지한 바운딩 박스들의 배열
+            
+        Returns:
+            numpy.ndarray: 업데이트된 트래킹 결과 [x1, y1, x2, y2, id]
+        """
+        # 현재 시간 기록
         current_time = time.time()
+        
+        # 오래된 트래커 제거 (max_age를 초과한 트래커)
         self.trackers = [t for t in self.trackers if (current_time - t.last_update) < self.max_age]
+        
+        # 업데이트된 객체들의 리스트
         updated_objects = []
 
+        # 탐지된 객체가 있는 경우에만 처리
         if len(detections) > 0:
+            # 각 탐지 결과에 대해
             for detection in detections:
-                best_tracker = None
-                max_iou = 0
+                best_tracker = None  # 가장 잘 매칭되는 트래커
+                max_iou = 0  # 최대 IOU 값
 
+                # 모든 트래커와 IOU 계산
                 for tracker in self.trackers:
+                    # 트래커의 예측 위치와 탐지 결과의 IOU 계산
                     iou_score = self.iou(tracker.predict(), detection)
+                    # 더 높은 IOU를 가진 트래커 선택
                     if iou_score > max_iou:
                         max_iou = iou_score
                         best_tracker = tracker
 
+                # 매칭되는 트래커가 있고 IOU가 임계값을 넘는 경우
                 if best_tracker and max_iou > self.iou_threshold:
+                    # 트래커 업데이트
                     best_tracker.update(detection)
+                    # 업데이트된 객체 정보 저장 [x1, y1, x2, y2, id]
                     updated_objects.append(np.append(best_tracker.kf.x[:4].flatten(), best_tracker.id))
                 else:
+                    # 새로운 트래커 생성
                     new_tracker = KalmanBoxTracker(detection)
                     self.trackers.append(new_tracker)
+                    # 새로운 객체 정보 저장
                     updated_objects.append(np.append(detection, new_tracker.id))
 
+        # 업데이트된 객체가 있으면 배열로 반환, 없으면 빈 배열 반환
         return np.array(updated_objects) if updated_objects else np.empty((0, 5))
 
 
@@ -218,15 +339,15 @@ try:
         # 구역 그리드 그리기
         draw_sector_grid(frame)
 
-        # YOLO 탐지
-        results = model(frame, imgsz=640)
+        # YOLO 탐지 (모든 출력 제거)
+        results = model(frame, imgsz=640, show=False, save=False, conf=DETECTION_CONFIDENCE, stream=True, verbose=False)
         detections = []
 
         for result in results:
             boxes = result.boxes.data.tolist()
             # 필터링을 한 번에 수행
             detections = [[x1, y1, x2, y2] for x1, y1, x2, y2, conf, cls_id in boxes 
-                         if conf >= DETECTION_CONFIDENCE and int(cls_id) == TARGET_CLASS]
+                         if int(cls_id) == TARGET_CLASS]
 
         # SORT로 트래킹 업데이트
         tracked_objects = tracker.update(np.array(detections) if detections else np.empty((0, 4)))
@@ -267,4 +388,3 @@ finally:
     cv2.destroyAllWindows()
     print("프로그램이 안전하게 종료됨")
 
-# 중앙에 위치했을 때에는 안움직이는 게 아니라, 천천히 중앙으로 움직이면 좋겠음
