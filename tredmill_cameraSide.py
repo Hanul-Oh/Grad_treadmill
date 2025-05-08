@@ -31,7 +31,8 @@ def send_sector(sector):
         sector: int - 전송할 구역 번호
     """
     try:
-        ser.write(str(sector).encode())
+        # 숫자를 직접 바이트로 전송 (ASCII 코드 변환 없이)
+        ser.write(bytes([sector]))
         time.sleep(0.1)  # 잠시 대기
     except Exception as e:
         print(f"시리얼 통신 오류: {e}")
