@@ -40,22 +40,28 @@ def send_sector(sector):
 # --- Helper functions for vector direction ---
 def draw_sector_grid(frame):
     """
-    화면에 모터 스텝 수에 따른 구역 번호를 표시합니다.
+    화면에 각도 기반의 구역 경계를 표시합니다.
     
     Parameters:
-        frame: numpy.ndarray - 구역 번호를 표시할 이미지 프레임
+        frame: numpy.ndarray - 구역 경계를 표시할 이미지 프레임
     """
     h, w = frame.shape[:2]
+    center = (w//2, h//2)
     
-    # 각 구역의 높이 계산
-    sector_height = h / MOTOR_STEPS
-    
-    # 구역 번호 표시
+    # 각 구역의 경계 각도 계산
     for i in range(MOTOR_STEPS):
-        # 구역의 중앙 y좌표 계산
-        text_y = int(i * sector_height + sector_height/2)
-        cv2.putText(frame, str(i), (10, text_y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+        # 각 구역의 경계 각도 계산 (위쪽이 0도)
+        # 각 구역의 중앙이 0도, 60도, 120도 등이 되도록 경계는 30도, 90도, 150도 등에 그어짐
+        angle = (i * ANGLE_PER_SECTOR + ANGLE_PER_SECTOR/2 + 90) % 360
+        
+        # 각도에 따른 선의 끝점 계산
+        # 화면 가장자리까지 선을 그리기 위해 충분히 긴 거리 사용
+        length = max(w, h) * 2
+        end_x = center[0] + int(length * math.cos(math.radians(angle)))
+        end_y = center[1] + int(length * math.sin(math.radians(angle)))
+        
+        # 구역 경계선 그리기
+        cv2.line(frame, center, (end_x, end_y), (200, 200, 200), 1)
 
 def calculate_vector_direction(start_point, end_point):
     """
