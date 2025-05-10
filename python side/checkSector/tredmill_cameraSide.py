@@ -12,6 +12,7 @@ MOTOR_STEPS = 6  # 모터의 총 스텝 수
 ANGLE_PER_SECTOR = 360 / MOTOR_STEPS  # 각 구역당 각도
 DETECTION_CONFIDENCE = 0.5  # YOLO 탐지 신뢰도 임계값
 TARGET_CLASS = 67  # Cell Phone 클래스 ID
+MAX_VECTOR_LENGTH = 300  # 최대 벡터 길이 (픽셀 단위)
 
 # 시리얼 포트 설정
 ser = serial.Serial(
@@ -23,16 +24,19 @@ ser = serial.Serial(
     timeout=1
 )
 
-def send_sector(sector):
+def send_sector(sector, vector_length):
     """
-    현재 구역 번호를 STM32로 전송합니다.
+    현재 구역 번호와 벡터 길이를 STM32로 전송합니다.
     
     Parameters:
         sector: int - 전송할 구역 번호
+        vector_length: int - 정규화된 벡터 길이 (0-9)
     """
     try:
-        # 숫자를 직접 바이트로 전송 (ASCII 코드 변환 없이)
-        ser.write(bytes([sector]))
+        # 구역 번호와 벡터 길이를 하나의 바이트로 패킹
+        # 상위 4비트는 구역 번호, 하위 4비트는 벡터 길이
+        packed_data = (sector << 4) | vector_length
+        ser.write(bytes([packed_data]))
         time.sleep(0.1)  # 잠시 대기
     except Exception as e:
         print(f"시리얼 통신 오류: {e}")
@@ -123,6 +127,36 @@ def draw_tracking_info(frame, bbox, obj_id, angle, sector):
     info_text = f"ID: {obj_id} | Angle: {angle:.1f}° | Sector: {sector}"
     cv2.putText(frame, info_text, (x1, y1 - 10),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+def calculate_vector_length(start_point, end_point):
+    """
+    두 점 사이의 벡터 길이를 계산합니다.
+    
+    Parameters:
+        start_point: tuple - 벡터의 시작점 (x, y) 좌표
+        end_point: tuple - 벡터의 끝점 (x, y) 좌표
+    
+    Returns:
+        float: 벡터의 길이
+    """
+    dx = end_point[0] - start_point[0]
+    dy = end_point[1] - start_point[1]
+    return math.sqrt(dx*dx + dy*dy)
+
+def normalize_vector_length(length):
+    """
+    벡터 길이를 0-9 사이의 정수로 정규화합니다.
+    
+    Parameters:
+        length: float - 원본 벡터 길이
+    
+    Returns:
+        int: 0-9 사이의 정규화된 값
+    """
+    # 길이를 0-9 사이로 정규화
+    normalized = int((length / MAX_VECTOR_LENGTH) * 9)
+    # 0-9 범위로 제한
+    return max(0, min(9, normalized))
 
 class KalmanBoxTracker:
     # 클래스 변수: 모든 인스턴스가 공유하는 트래커 ID 카운터
@@ -351,16 +385,18 @@ try:
                     x1, y1, x2, y2, obj_id = map(int, obj)
                     start_point = ((x1 + x2) // 2, (y1 + y2) // 2)
                     
-                    # 벡터 방향 계산
+                    # 벡터 방향과 길이 계산
                     angle = calculate_vector_direction(start_point, center_point)
+                    vector_length = calculate_vector_length(start_point, center_point)
+                    normalized_length = normalize_vector_length(vector_length)
                     sector = get_sector(angle)
                     
                     # 정보 표시
                     draw_tracking_info(frame, [x1, y1, x2, y2], obj_id, angle, sector)
-                    print(f"Object {obj_id} - Angle: {angle:.1f}°, Sector: {sector}")
+                    print(f"Object {obj_id} - Angle: {angle:.1f}°, Sector: {sector}, Vector Length: {normalized_length}")
                     
-                    # 현재 구역 번호를 STM32로 전송
-                    send_sector(sector)
+                    # 현재 구역 번호와 벡터 길이를 STM32로 전송
+                    send_sector(sector, normalized_length)
                     
                 except ValueError as e:
                     print(f"ValueError: {e}, Data: {obj}")
