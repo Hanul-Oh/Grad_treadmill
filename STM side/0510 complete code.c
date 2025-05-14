@@ -51,6 +51,9 @@
 #define CIRCLE_MODE_LAYER2_PWM 3500
 #define CIRCLE_MODE_TRANSITION_DELAY 1000  // 1초
 #define CIRCLE_MODE_SECTOR_ANGLE 60  // 섹터당 60도 회전 (360도/6)
+#define CIRCLE_MODE_RADIUS_TIME 1000  // 회전 반지름 이동 시간 (ms)
+#define CIRCLE_MODE_90_DEGREE_RAW 12  // 90도 회전에 해당하는 raw counter 값
+#define CIRCLE_MODE_60_DEGREE_RAW 8   // 60도 회전에 해당하는 raw counter 값
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -68,6 +71,17 @@ int newSector = 0;
 uint8_t currentVectorLength = 0;  // 현재 벡터 길이 (0-9)
 uint8_t sectorUpdated = 0;
 uint8_t g_circleModeEnabled = 0;  // 빙빙 모드 활성화 여부
+
+// 빙빙 모드 상태 관리
+typedef enum {
+    CIRCLE_STATE_MOVING_UP,      // 위로 이동 중
+    CIRCLE_STATE_ROTATING_90,    // 90도 회전 중
+    CIRCLE_STATE_CIRCLE_MOTION   // 원 운동 중
+} CircleState_t;
+
+CircleState_t g_circleState = CIRCLE_STATE_MOVING_UP;
+uint32_t g_circleStartTime = 0;
+int g_previousSector = -1;  // 이전 sector 저장용
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -379,10 +393,15 @@ void enterCircleMode(void) {
     // 2. 2층 모터 초기화
     initializeCircleMode();
     
-    // 3. 1층 모터 회전 시작
+    // 3. 상태 초기화
+    g_circleState = CIRCLE_STATE_MOVING_UP;
+    g_circleStartTime = HAL_GetTick();
+    g_previousSector = currentSector;
+    
+    // 4. 1층 모터 회전 시작 (1초간 위로 이동)
     __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, CIRCLE_MODE_LAYER1_PWM);
     
-    // 4. 빙빙 모드 활성화
+    // 5. 빙빙 모드 활성화
     g_circleModeEnabled = 1;
 }
 
@@ -390,6 +409,7 @@ void enterCircleMode(void) {
 void exitCircleMode(void) {
     // 1. 1층 모터 정지
     stopMotor(1);
+    stopMotor(2);
     HAL_Delay(CIRCLE_MODE_TRANSITION_DELAY);
     
     // 2. 2층 모터 각도 조정 (중앙 모드로)
@@ -397,30 +417,76 @@ void exitCircleMode(void) {
     
     // 3. 빙빙 모드 비활성화
     g_circleModeEnabled = 0;
+    g_circleState = CIRCLE_STATE_MOVING_UP;
 }
 
 // 빙빙 모드 업데이트 함수
 void updateCircleMode(void) {
     if (!g_circleModeEnabled) return;
     
-    // 현재 섹터 확인
-    int targetSector = currentSector;
+    uint32_t currentTime = HAL_GetTick();
     
-    // 2층 모터 각도 계산 및 조정
-    int targetRaw = targetSector * 8;  // 각 섹터는 8씩 증가
-    
-    // 현재 위치와 목표 위치의 차이 계산
-    int diff = targetRaw - rawCounter;
-    
-    // 회전 방향 결정 및 실행
-    if (abs(diff) > RAW_TOLERANCE) {
-        if (diff > 0) {
-            rotateForward();
-        } else {
-            rotateReverse();
-        }
-    } else {
-        stopMotor(2);
+    switch(g_circleState) {
+        case CIRCLE_STATE_MOVING_UP:
+            // 1단계: 1초 동안 위로 이동
+            if ((currentTime - g_circleStartTime) >= CIRCLE_MODE_RADIUS_TIME) {
+                // 1초 완료, 1층 모터 정지
+                stopMotor(1);
+                
+                // 2단계로 전환
+                g_circleState = CIRCLE_STATE_ROTATING_90;
+                g_circleStartTime = currentTime;
+                
+                // 2층 모터 90도 회전 시작
+                rotateForward();
+            }
+            break;
+            
+        case CIRCLE_STATE_ROTATING_90:
+            // 2단계: 90도 회전
+            // 목표 위치: 초기 위치(0) + 90도(12)
+            if (rawCounter >= CIRCLE_MODE_90_DEGREE_RAW - RAW_TOLERANCE && 
+                rawCounter <= CIRCLE_MODE_90_DEGREE_RAW + RAW_TOLERANCE) {
+                // 90도 회전 완료
+                stopMotor(2);
+                
+                // 3단계로 전환
+                g_circleState = CIRCLE_STATE_CIRCLE_MOTION;
+                
+                // 1층 모터 다시 시작 (원 운동)
+                __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, CIRCLE_MODE_LAYER1_PWM);
+            }
+            break;
+            
+        case CIRCLE_STATE_CIRCLE_MOTION:
+            // 3단계: 원 운동
+            // sector가 변경되었는지 확인
+            if (currentSector != g_previousSector) {
+                // sector 변경 시 2층 모터 60도 회전
+                int sectorDiff = (currentSector - g_previousSector + 6) % 6;
+                int targetRaw = (rawCounter + (sectorDiff * CIRCLE_MODE_60_DEGREE_RAW)) % 48;
+                
+                // 목표 위치로 회전
+                if (rawCounter != targetRaw) {
+                    int diff = targetRaw - rawCounter;
+                    
+                    // 최단 경로 계산 (48로 나눈 나머지 고려)
+                    if (diff > 24) diff -= 48;
+                    if (diff < -24) diff += 48;
+                    
+                    if (abs(diff) > RAW_TOLERANCE) {
+                        if (diff > 0) {
+                            rotateForward();
+                        } else {
+                            rotateReverse();
+                        }
+                    } else {
+                        stopMotor(2);
+                        g_previousSector = currentSector;
+                    }
+                }
+            }
+            break;
     }
 }
 
