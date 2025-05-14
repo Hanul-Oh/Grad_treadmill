@@ -45,6 +45,12 @@
 #define SECTOR5_RAW 40
 #define RAW_TOLERANCE 2
 #define MAX_VECTOR_LENGTH 9  // 최대 벡터 길이 (0-9)
+
+// 빙빙 모드 관련 상수
+#define CIRCLE_MODE_LAYER1_PWM 3500
+#define CIRCLE_MODE_LAYER2_PWM 3500
+#define CIRCLE_MODE_TRANSITION_DELAY 1000  // 1초
+#define CIRCLE_MODE_SECTOR_ANGLE 45  // 섹터당 45도 회전
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -61,6 +67,7 @@ int currentSector = 0;
 int newSector = 0;
 uint8_t currentVectorLength = 0;  // 현재 벡터 길이 (0-9)
 uint8_t sectorUpdated = 0;
+uint8_t g_circleModeEnabled = 0;  // 빙빙 모드 활성화 여부
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -74,6 +81,10 @@ static void MX_NVIC_Init(void);
 /* USER CODE BEGIN 0 */
 void changeSector(int newSector);
 void changeSpeed();
+void enterCircleMode(void);
+void exitCircleMode(void);
+void updateCircleMode(void);
+void initializeCircleMode(void);
 /* USER CODE END 0 */
 
 /**
@@ -346,8 +357,72 @@ void changeSpeed(){
 
 }
 
+// 빙빙 모드 초기화 함수
+void initializeCircleMode(void) {
+    // 2층 모터를 초기 위치로 설정 (rawCounter = 0)
+    while (rawCounter != 0) {
+        if (rawCounter > 24) {
+            rotateReverse();
+        } else {
+            rotateForward();
+        }
+    }
+    stopMotor(2);
+}
 
+// 빙빙 모드 진입 함수
+void enterCircleMode(void) {
+    // 1. 1층 모터 정지
+    stopMotor(1);
+    HAL_Delay(CIRCLE_MODE_TRANSITION_DELAY);
+    
+    // 2. 2층 모터 초기화
+    initializeCircleMode();
+    
+    // 3. 1층 모터 회전 시작
+    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, CIRCLE_MODE_LAYER1_PWM);
+    
+    // 4. 빙빙 모드 활성화
+    g_circleModeEnabled = 1;
+}
 
+// 빙빙 모드 종료 함수
+void exitCircleMode(void) {
+    // 1. 1층 모터 정지
+    stopMotor(1);
+    HAL_Delay(CIRCLE_MODE_TRANSITION_DELAY);
+    
+    // 2. 2층 모터 각도 조정 (중앙 모드로)
+    changeSector(currentSector);
+    
+    // 3. 빙빙 모드 비활성화
+    g_circleModeEnabled = 0;
+}
+
+// 빙빙 모드 업데이트 함수
+void updateCircleMode(void) {
+    if (!g_circleModeEnabled) return;
+    
+    // 현재 섹터 확인
+    int targetSector = currentSector;
+    
+    // 2층 모터 각도 계산 및 조정
+    int targetRaw = targetSector * 8;  // 각 섹터는 8씩 증가
+    
+    // 현재 위치와 목표 위치의 차이 계산
+    int diff = targetRaw - rawCounter;
+    
+    // 회전 방향 결정 및 실행
+    if (abs(diff) > RAW_TOLERANCE) {
+        if (diff > 0) {
+            rotateForward();
+        } else {
+            rotateReverse();
+        }
+    } else {
+        stopMotor(2);
+    }
+}
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
@@ -356,7 +431,14 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
            uint8_t received_byte = g_RxBuff[0];
            newSector = (received_byte >> 4) & 0x0F;  // 상위 4비트: 구역 번호
            currentVectorLength = received_byte & 0x0F;  // 하위 4비트: 벡터 길이
-           sectorUpdated = 1;
+           
+           // 빙빙 모드가 활성화되어 있으면 updateCircleMode 호출
+           if (g_circleModeEnabled) {
+               updateCircleMode();
+           } else {
+               sectorUpdated = 1;
+           }
+           
            HAL_UART_Receive_IT(&huart2, g_RxBuff, 1);  // 다시 인터럽트 활성화
        }
 }
