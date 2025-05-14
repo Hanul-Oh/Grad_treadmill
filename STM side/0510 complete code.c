@@ -50,7 +50,7 @@
 #define CIRCLE_MODE_LAYER1_PWM 3500
 #define CIRCLE_MODE_LAYER2_PWM 3500
 #define CIRCLE_MODE_TRANSITION_DELAY 1000  // 1초
-#define CIRCLE_MODE_SECTOR_ANGLE 45  // 섹터당 45도 회전
+#define CIRCLE_MODE_SECTOR_ANGLE 60  // 섹터당 60도 회전 (360도/6)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
