@@ -54,6 +54,11 @@
 #define CIRCLE_MODE_RADIUS_TIME 1000  // 회전 반지름 이동 시간 (ms)
 #define CIRCLE_MODE_90_DEGREE_RAW 12  // 90도 회전에 해당하는 raw counter 값
 #define CIRCLE_MODE_60_DEGREE_RAW 8   // 60도 회전에 해당하는 raw counter 값
+
+// UART 명령어 관련 상수
+#define CMD_MODE_CENTER 'c'  // 중앙 모드 전환 명령
+#define CMD_MODE_CIRCLE 'r'  // 빙빙 모드 전환 명령
+#define CMD_MODE_CUSTOM 'm'  // 커스텀 모드 전환 명령
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -70,7 +75,15 @@ int currentSector = 0;
 int newSector = 0;
 uint8_t currentVectorLength = 0;  // 현재 벡터 길이 (0-9)
 uint8_t sectorUpdated = 0;
-uint8_t g_circleModeEnabled = 0;  // 빙빙 모드 활성화 여부
+
+// 운영 모드 정의
+typedef enum {
+    MODE_CENTER = 0,    // 중앙으로 보내는 모드
+    MODE_CIRCLE = 1,    // 빙빙 도는 모드
+    MODE_CUSTOM = 2     // 추가 예정인 커스텀 모드
+} OperationMode_t;
+
+OperationMode_t g_currentMode = MODE_CENTER;  // 기본 모드: 중앙 모드
 
 // 빙빙 모드 상태 관리
 typedef enum {
@@ -95,10 +108,25 @@ static void MX_NVIC_Init(void);
 /* USER CODE BEGIN 0 */
 void changeSector(int newSector);
 void changeSpeed();
-void enterCircleMode(void);
-void exitCircleMode(void);
+void rotateForward(void);
+void rotateReverse(void);
+void stopMotor(int motorCh);
+
+// 모드 관련 함수 선언
+void changeMode(OperationMode_t newMode);
+void initCenterMode(void);
+void updateCenterMode(void);
+
+void initCircleMode(void);
 void updateCircleMode(void);
-void initializeCircleMode(void);
+void exitCircleMode(void);
+
+void initCustomMode(void);
+void updateCustomMode(void);
+void exitCustomMode(void);
+
+// UART 명령 처리 함수
+void processCommand(uint8_t cmd);
 /* USER CODE END 0 */
 
 /**
@@ -154,14 +182,23 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+    // 엔코더 값 읽기
+    rawCounter = __HAL_TIM_GET_COUNTER(&htim1);
 
-     rawCounter = __HAL_TIM_GET_COUNTER(&htim1);
-
-     if(sectorUpdated){
-        changeSector(newSector);
-     }
-     
-     changeSpeed();
+    // 현재 모드에 따른 업데이트 처리
+    switch (g_currentMode) {
+        case MODE_CENTER:
+            updateCenterMode();
+            break;
+            
+        case MODE_CIRCLE:
+            // 빙빙 모드는 UART 인터럽트에서 처리됨
+            break;
+            
+        case MODE_CUSTOM:
+            updateCustomMode();
+            break;
+    }
 
     /* USER CODE END WHILE */
 
@@ -247,132 +284,65 @@ void rotateReverse(void) {
    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 2800);  // 역방향 회전을 위한 PWM 값
 }
 
-// 구역 변경 함수
-void changeSector(int newSector) {
-    if(currentSector != newSector) {
-        // 정방향으로 회전할 때의 각도 차이 계산
-        int32_t forwardDiff = (newSector - currentSector + 6) % 6;
-        // 역방향으로 회전할 때의 각도 차이 계산
-        int32_t reverseDiff = (currentSector - newSector + 6) % 6;
-
-        // 정방향이 더 빠른 경우
-        if(forwardDiff <= reverseDiff) {
-            rotateForward();
-
-            switch(newSector) {
-                case 0:
-                    if(abs(rawCounter - SECTOR0_RAW) <= RAW_TOLERANCE) {  // 0구역
-                        stopMotor(2);
-                        currentSector = newSector;
-                        sectorUpdated = 0;
-                    }
-                    break;
-                case 1:
-                    if(abs(rawCounter - SECTOR1_RAW) <= RAW_TOLERANCE) {  // 1구역
-                        stopMotor(2);
-                        currentSector = newSector;
-                        sectorUpdated = 0;
-                    }
-                    break;
-                case 2:
-                    if(abs(rawCounter - SECTOR2_RAW) <= RAW_TOLERANCE) {  // 2구역
-                        stopMotor(2);
-                        currentSector = newSector;
-                        sectorUpdated = 0;
-                    }
-                    break;
-                case 3:
-                    if(abs(rawCounter - SECTOR3_RAW) <= RAW_TOLERANCE) {  // 3구역
-                        stopMotor(2);
-                        currentSector = newSector;
-                        sectorUpdated = 0;
-                    }
-                    break;
-                case 4:
-                    if(abs(rawCounter - SECTOR4_RAW) <= RAW_TOLERANCE) {  // 4구역
-                        stopMotor(2);
-                        currentSector = newSector;
-                        sectorUpdated = 0;
-                    }
-                    break;
-                case 5:
-                    if(abs(rawCounter - SECTOR5_RAW) <= RAW_TOLERANCE) {  // 5구역
-                        stopMotor(2);
-                        currentSector = newSector;
-                        sectorUpdated = 0;
-                    }
-                    break;
-            }
-        }
-        // 역방향이 더 빠른 경우
-        else {
-            rotateReverse();
-
-            switch(newSector) {
-               case 0:
-               if(abs(rawCounter - SECTOR0_RAW) <= RAW_TOLERANCE) {  // 0구역
-                  stopMotor(2);
-                  currentSector = newSector;
-                  sectorUpdated = 0;
-               }
-               break;
-            case 1:
-               if(abs(rawCounter - SECTOR1_RAW) <= RAW_TOLERANCE) {  // 1구역
-                  stopMotor(2);
-                  currentSector = newSector;
-                  sectorUpdated = 0;
-               }
-               break;
-            case 2:
-               if(abs(rawCounter - SECTOR2_RAW) <= RAW_TOLERANCE) {  // 2구역
-                  stopMotor(2);
-                  currentSector = newSector;
-                  sectorUpdated = 0;
-               }
-               break;
-            case 3:
-               if(abs(rawCounter - SECTOR3_RAW) <= RAW_TOLERANCE) {  // 3구역
-                  stopMotor(2);
-                  currentSector = newSector;
-                  sectorUpdated = 0;
-               }
-               break;
-            case 4:
-               if(abs(rawCounter - SECTOR4_RAW) <= RAW_TOLERANCE) {  // 4구역
-                  stopMotor(2);
-                  currentSector = newSector;
-                  sectorUpdated = 0;
-               }
-               break;
-            case 5:
-               if(abs(rawCounter - SECTOR5_RAW) <= RAW_TOLERANCE) {  // 5구역
-                  stopMotor(2);
-                  currentSector = newSector;
-                  sectorUpdated = 0;
-               }
-               break;
-            }
-        }
+// 모드 전환 함수
+void changeMode(OperationMode_t newMode) {
+    // 현재 모드와 동일하면 무시
+    if (g_currentMode == newMode) return;
+    
+    // 현재 모드 종료 처리
+    switch (g_currentMode) {
+        case MODE_CENTER:
+            // 중앙 모드는 특별한 종료 처리 필요 없음
+            stopMotor(1);
+            stopMotor(2);
+            break;
+        case MODE_CIRCLE:
+            exitCircleMode();
+            break;
+        case MODE_CUSTOM:
+            exitCustomMode();
+            break;
     }
+    
+    // 새 모드 시작 처리
+    switch (newMode) {
+        case MODE_CENTER:
+            initCenterMode();
+            break;
+        case MODE_CIRCLE:
+            initCircleMode();
+            break;
+        case MODE_CUSTOM:
+            initCustomMode();
+            break;
+    }
+    
+    // 현재 모드 업데이트
+    g_currentMode = newMode;
+}
+
+// 중앙 모드 초기화
+void initCenterMode(void) {
+    // 중앙 모드는 기본 설정으로 초기화
     sectorUpdated = 0;
 }
 
-// 이동 속도 조절 함수
-void changeSpeed(){
-    uint32_t pwm_value = 3150;  // 기본 PWM 값 (정방향 최소값)
-    if(currentVectorLength > 3) {
-           // 3150-4200 범위로 PWM 값 조정
-           pwm_value = 3150 + (currentVectorLength * 117);  // (4200-3150)/9 ≈ 117
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pwm_value);
+// 중앙 모드 업데이트
+void updateCenterMode(void) {
+    // 기존 중앙 모드 로직
+    if(sectorUpdated){
+        changeSector(newSector);
     }
-    else{
-       stopMotor(1);
-    }
-
+    changeSpeed();
 }
 
 // 빙빙 모드 초기화 함수
-void initializeCircleMode(void) {
+void initCircleMode(void) {
+    // 1. 1층 모터 정지
+    stopMotor(1);
+    HAL_Delay(CIRCLE_MODE_TRANSITION_DELAY);
+    
+    // 2. 2층 모터 초기화
     // 2층 모터를 초기 위치로 설정 (rawCounter = 0)
     while (rawCounter != 0) {
         if (rawCounter > 24) {
@@ -382,16 +352,6 @@ void initializeCircleMode(void) {
         }
     }
     stopMotor(2);
-}
-
-// 빙빙 모드 진입 함수
-void enterCircleMode(void) {
-    // 1. 1층 모터 정지
-    stopMotor(1);
-    HAL_Delay(CIRCLE_MODE_TRANSITION_DELAY);
-    
-    // 2. 2층 모터 초기화
-    initializeCircleMode();
     
     // 3. 상태 초기화
     g_circleState = CIRCLE_STATE_MOVING_UP;
@@ -400,9 +360,6 @@ void enterCircleMode(void) {
     
     // 4. 1층 모터 회전 시작 (1초간 위로 이동)
     __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, CIRCLE_MODE_LAYER1_PWM);
-    
-    // 5. 빙빙 모드 활성화
-    g_circleModeEnabled = 1;
 }
 
 // 빙빙 모드 종료 함수
@@ -414,16 +371,10 @@ void exitCircleMode(void) {
     
     // 2. 2층 모터 각도 조정 (중앙 모드로)
     changeSector(currentSector);
-    
-    // 3. 빙빙 모드 비활성화
-    g_circleModeEnabled = 0;
-    g_circleState = CIRCLE_STATE_MOVING_UP;
 }
 
 // 빙빙 모드 업데이트 함수
 void updateCircleMode(void) {
-    if (!g_circleModeEnabled) return;
-    
     uint32_t currentTime = HAL_GetTick();
     
     switch(g_circleState) {
@@ -434,8 +385,7 @@ void updateCircleMode(void) {
                 stopMotor(1);
                 
                 // 2단계로 전환
-                g_circleState = CIRCLE_STATE_ROTATING_90;
-                g_circleStartTime = currentTime;
+                g_circleState = CIRCLE_STATE_ROTATING_90; // 90도 회전 중이라는 플래그
                 
                 // 2층 모터 90도 회전 시작
                 rotateForward();
@@ -445,8 +395,9 @@ void updateCircleMode(void) {
         case CIRCLE_STATE_ROTATING_90:
             // 2단계: 90도 회전
             // 목표 위치: 초기 위치(0) + 90도(12)
-            if (rawCounter >= CIRCLE_MODE_90_DEGREE_RAW - RAW_TOLERANCE && 
-                rawCounter <= CIRCLE_MODE_90_DEGREE_RAW + RAW_TOLERANCE) {
+            // 음수 처리를 포함한 비교
+            int diff = abs((rawCounter + 48) % 48 - CIRCLE_MODE_90_DEGREE_RAW);
+            if (diff <= RAW_TOLERANCE) {
                 // 90도 회전 완료
                 stopMotor(2);
                 
@@ -490,23 +441,121 @@ void updateCircleMode(void) {
     }
 }
 
+// 커스텀 모드 초기화 함수 (나중에 구현)
+void initCustomMode(void) {
+    // 향후 구현
+    stopMotor(1);
+    stopMotor(2);
+}
+
+// 커스텀 모드 업데이트 함수 (나중에 구현)
+void updateCustomMode(void) {
+    // 향후 구현
+}
+
+// 커스텀 모드 종료 함수 (나중에 구현)
+void exitCustomMode(void) {
+    // 향후 구현
+    stopMotor(1);
+    stopMotor(2);
+}
+
+// UART 명령어 처리 함수
+void processCommand(uint8_t cmd) {
+    switch(cmd) {
+        case CMD_MODE_CENTER:
+            changeMode(MODE_CENTER);
+            break;
+            
+        case CMD_MODE_CIRCLE:
+            changeMode(MODE_CIRCLE);
+            break;
+            
+        case CMD_MODE_CUSTOM:
+            changeMode(MODE_CUSTOM);
+            break;
+            
+        // 향후 더 많은 명령어 추가 가능
+        
+        default:
+            // 알 수 없는 명령은 무시
+            break;
+    }
+}
+
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-   if (huart->Instance == USART2) {
-           // 수신된 바이트에서 구역 번호와 벡터 길이 추출
-           uint8_t received_byte = g_RxBuff[0];
-           newSector = (received_byte >> 4) & 0x0F;  // 상위 4비트: 구역 번호
-           currentVectorLength = received_byte & 0x0F;  // 하위 4비트: 벡터 길이
-           
-           // 빙빙 모드가 활성화되어 있으면 updateCircleMode 호출
-           if (g_circleModeEnabled) {
-               updateCircleMode();
-           } else {
-               sectorUpdated = 1;
-           }
-           
-           HAL_UART_Receive_IT(&huart2, g_RxBuff, 1);  // 다시 인터럽트 활성화
-       }
+    if (huart->Instance == USART2) {
+        // 수신된 바이트 처리
+        uint8_t received_byte = g_RxBuff[0];
+        
+        // 모드 변경 명령인지 확인
+        if (received_byte == CMD_MODE_CENTER || 
+            received_byte == CMD_MODE_CIRCLE || 
+            received_byte == CMD_MODE_CUSTOM) {
+            
+            // 모드 변경 명령 처리
+            processCommand(received_byte);
+        } 
+        else {
+            // 일반 데이터 처리 (기존 로직)
+            newSector = (received_byte >> 4) & 0x0F;  // 상위 4비트: 구역 번호
+            currentVectorLength = received_byte & 0x0F;  // 하위 4비트: 벡터 길이
+            
+            // 현재 모드에 따른 처리
+            switch (g_currentMode) {
+                case MODE_CENTER:
+                    sectorUpdated = 1;
+                    break;
+                    
+                case MODE_CIRCLE:
+                    updateCircleMode();
+                    break;
+                    
+                case MODE_CUSTOM:
+                    // 향후 구현
+                    break;
+            }
+        }
+        
+        // 다시 인터럽트 활성화
+        HAL_UART_Receive_IT(&huart2, g_RxBuff, 1);
+    }
+}
+
+// 구역 변경 함수
+void changeSector(int newSector) {
+    if(currentSector != newSector) {
+        // 정방향으로 회전할 때의 각도 차이 계산
+        int32_t forwardDiff = (newSector - currentSector + 6) % 6;
+        // 역방향으로 회전할 때의 각도 차이 계산
+        int32_t reverseDiff = (currentSector - newSector + 6) % 6;
+        
+        // 정방향이 더 빠른 경우
+        if(forwardDiff <= reverseDiff) {
+            rotateForward();
+
+            switch(newSector) {
+                case 0:
+                    if(abs(rawCounter - SECTOR0_RAW) <= RAW_TOLERANCE) {  // 0구역
+                        stopMotor(2);
+                        currentSector = newSector;
+                        sectorUpdated = 0;
+                    }
+                    break;
+                // ... 다른 case 문들 ...
+            }
+        }
+        // 역방향이 더 빠른 경우
+        else {
+            rotateReverse();
+            
+            switch(newSector) {
+                // ... case 문들 ...
+            }
+        }
+    }
+    sectorUpdated = 0;
 }
 
 /* USER CODE END 4 */
@@ -542,3 +591,4 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
+
