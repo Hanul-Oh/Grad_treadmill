@@ -373,6 +373,10 @@ void exitCircleMode(void) {
     
     // 2. 2층 모터 각도 조정 (중앙 모드로)
     changeSector(currentSector);
+    
+    // 상태 완전 초기화 -> 굳이 필요 없긴 하지만 GPT가 하랜다
+    g_circleState = CIRCLE_STATE_MOVING_UP;
+    g_previousSector = -1;
 }
 
 // 빙빙 모드 업데이트 함수
@@ -398,7 +402,7 @@ void updateCircleMode(void) {
             // 2단계: 90도 회전
             // 목표 위치: 초기 위치(0) + 90도(12)
             // 음수 처리를 포함한 비교
-            int diff = abs((rawCounter + 48) % 48 - CIRCLE_MODE_90_DEGREE_RAW);
+            int diff = abs((int)((rawCounter + 48) % 48 - CIRCLE_MODE_90_DEGREE_RAW));
             if (diff <= RAW_TOLERANCE) {
                 // 90도 회전 완료
                 stopMotor(2);
