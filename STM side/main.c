@@ -345,7 +345,7 @@ void initCircleMode(void) {
     
     // 2. 2층 모터 초기화
     // 2층 모터를 초기 위치로 설정 (rawCounter = 0)
-    while (rawCounter != 0) {
+    while (rawCounter > RAW_TOLERANCE || rawCounter < (48 - RAW_TOLERANCE)) {
         if (rawCounter > 24) {
             rotateReverse();
         } else {
