@@ -183,7 +183,7 @@ int main(void)
   while (1)
   {
     // 엔코더 값 읽기
-    rawCounter = __HAL_TIM_GET_COUNTER(&htim1);
+    rawCounter = __HAL_TIM_GET_COUNTER(&htim1); // 질문: 엔코더 값을 이렇게 읽는 게 맞나?
 
     // 현재 모드에 따른 업데이트 처리
     switch (g_currentMode) {
@@ -330,11 +330,12 @@ void initCenterMode(void) {
 // 중앙 모드 업데이트
 void updateCenterMode(void) {
     // 기존 중앙 모드 로직
-    if(sectorUpdated){
+    if(sectorUpdated){ // sector 변경 시 2층 모터 돌려서 각도 변경
         changeSector(newSector);
     }
-    changeSpeed();
+    changeSpeed(); // 중심으로부터 거리에 따른 속도 변경
 }
+// center mode는 exit 함수가 없음.
 
 // 빙빙 모드 초기화 함수
 void initCircleMode(void) {
@@ -361,6 +362,7 @@ void initCircleMode(void) {
     // 4. 1층 모터 회전 시작 (1초간 위로 이동)
     __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, CIRCLE_MODE_LAYER1_PWM);
 }
+
 
 // 빙빙 모드 종료 함수
 void exitCircleMode(void) {
