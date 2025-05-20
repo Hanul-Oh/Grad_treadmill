@@ -53,6 +53,7 @@
 #define CMD_MODE_CUSTOM 'm'
 
 // 모터 제어 관련 상수
+#define MOTOR_NEUTRAL 3150
 #define MOTOR_PWM_VALUE 3500
 #define MOTOR_REVERSE_VALUE 2800
 /* USER CODE END PD */
@@ -88,15 +89,19 @@ static void MX_NVIC_Init(void);
 /* USER CODE BEGIN PFP */
 void initMotors(void);
 void stopMotors(void);
+void stopMotor(int motorCh);
+void rotateForward(void);
+void rotateReverse(void);
 void rotateMotor(int motorCh, int direction);
-void updateSector(int targetSector);
+void updateSectorCenterMode(int targetSector);
 void updateSpeed(void);
 void changeMode(uint8_t cmd);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-// 모터 초기화
+/* === 초기화 함수 === */
 void initMotors(void) {
     HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1); // 1층
     HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2); // 2층
@@ -104,87 +109,84 @@ void initMotors(void) {
     HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL);
 }
 
-// 모든 모터 정지
+/* === 모터 제어 === */
 void stopMotors(void) {
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 0);
+    stopMotor(1);
+    stopMotor(2);
 }
 
-// 모터 회전 (direction: 1=정방향, -1=역방향)
+void stopMotor(int motorCh) {
+    if (motorCh == 1)
+        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, MOTOR_NEUTRAL);
+    else if (motorCh == 2)
+        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, MOTOR_NEUTRAL);
+}
+
+void rotateForward(void) {
+    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, MOTOR_PWM_VALUE);
+}
+
+void rotateReverse(void) {
+    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, MOTOR_REVERSE_VALUE);
+}
+
 void rotateMotor(int motorCh, int direction) {
     uint32_t pwmValue = (direction > 0) ? MOTOR_PWM_VALUE : MOTOR_REVERSE_VALUE;
-    
-    switch(motorCh) {
-        case 1:
-            __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pwmValue);
-            break;
-        case 2:
-            __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pwmValue);
-            break;
-        case 3:
-            __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, pwmValue);
-            break;
-        case 4:
-            __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, pwmValue);
-            break;
-        default:
-            // 잘못된 채널 번호 처리
-            break;
-    }
+
+    if (motorCh == 1)
+        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pwmValue);
+    else if (motorCh == 2)
+        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pwmValue);
 }
 
-// 섹터 업데이트
-void updateSector(int targetSector) {
-    if(currentSector == targetSector) return;
+/* === 섹터 회전 === */
+void updateSectorCenterMode(int targetSector) {
+    if (currentSector == targetSector) return;
 
-    // 정방향으로 회전할 때의 각도 차이 계산
-    int32_t forwardDiff = (targetSector - currentSector + SECTOR_COUNT) % SECTOR_COUNT;
-    // 역방향으로 회전할 때의 각도 차이 계산
-    int32_t reverseDiff = (currentSector - targetSector + SECTOR_COUNT) % SECTOR_COUNT;
+    int forwardDiff = (targetSector - currentSector + SECTOR_COUNT) % SECTOR_COUNT;
+    int reverseDiff = (currentSector - targetSector + SECTOR_COUNT) % SECTOR_COUNT;
 
-    // 최단 경로로 회전
     int direction = (forwardDiff <= reverseDiff) ? 1 : -1;
-    rotateMotor(2, direction);
+    if (direction == 1) rotateForward();
+    else rotateReverse();
 
-    // 목표 위치 도달 확인
     int targetRaw = targetSector * SECTOR_ANGLE_RAW;
-    if(abs(rawCounter - targetRaw) <= RAW_TOLERANCE) {
-        stopMotors();
+    if (abs((int)rawCounter - targetRaw) <= RAW_TOLERANCE) {
+        stopMotor(2);
         currentSector = targetSector;
         sectorUpdated = 0;
     }
 }
 
-// 속도 업데이트
+/* === 속도 제어 === */
 void updateSpeed(void) {
-    if(currentVectorLength > 3) {
-        uint32_t pwmValue = 3150 + (currentVectorLength * 117);
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pwmValue);
+    if (currentVectorLength > 3) {
+        uint32_t pwm = 3150 + (currentVectorLength * 117); // 3150~4200
+        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pwm);
     } else {
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
+        stopMotor(1);
     }
 }
 
-// 모드 전환
+/* === 모드 전환 === */
 void changeMode(uint8_t cmd) {
     printf("changeMode()\r\n");
     
-    // 명령어에 따른 목표 모드 설정
-    switch(cmd) {
+    switch (cmd) {
         case CMD_MODE_CENTER:
-            printf("cmd = %d (CMD_MODE_CENTER)\r\n", cmd);
+            printf("CMD_MODE_CENTER\r\n");
             targetMode = MODE_CENTER;
             break;
         case CMD_MODE_CIRCLE:
-            printf("cmd = %d (CMD_MODE_CIRCLE)\r\n", cmd);
+            printf("CMD_MODE_CIRCLE\r\n");
             targetMode = MODE_CIRCLE;
             break;
         case CMD_MODE_CUSTOM:
-            printf("cmd = %d (CMD_MODE_CUSTOM)\r\n", cmd);
+            printf("CMD_MODE_CUSTOM\r\n");
             targetMode = MODE_CUSTOM;
             break;
         default:
-            printf("cmd = %d (Unknown command)\r\n", cmd);
+            printf("Unknown Command: %d\r\n", cmd);
             return;
     }
     
@@ -194,23 +196,21 @@ void changeMode(uint8_t cmd) {
     }
     
     printf("모드 전환: %d -> %d\r\n", g_currentMode, targetMode);
-    
-    // 현재 모드 종료
+
     stopMotors();
-    
-    // 새 모드 시작
+
     switch (targetMode) {
         case MODE_CENTER:
-            printf("center mode init\r\n");
+            printf("CENTER 모드 시작\r\n");
             sectorUpdated = 0;
             break;
         case MODE_CIRCLE:
-            printf("circle mode init\r\n");
-            rotateMotor(1, 1);  // 1층 모터 정방향 회전
+            printf("CIRCLE 모드 시작\r\n");
+            rotateMotor(1, 1);
             previousSector = currentSector;
             break;
         case MODE_CUSTOM:
-            printf("custom mode init\r\n");
+            printf("CUSTOM 모드 시작\r\n");
             break;
     }
     
@@ -218,29 +218,27 @@ void changeMode(uint8_t cmd) {
     printf("모드 전환 완료\r\n");
 }
 
+/* === UART 수신 콜백 === */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
-    received_byte = g_RxBuff[0];
+    if (huart->Instance == USART2) {
+        received_byte = g_RxBuff[0];
 
-    // 모드 변경 명령 처리
-    if (received_byte == CMD_MODE_CENTER || 
-        received_byte == CMD_MODE_CIRCLE || 
-        received_byte == CMD_MODE_CUSTOM) {
-        changeMode(received_byte);
-    } else {
-        // 섹터 및 벡터 정보 업데이트
-        newSector = (received_byte >> 4) & 0x0F;
-        currentVectorLength = received_byte & 0x0F;
-
-        if (g_currentMode == MODE_CENTER) {
-            sectorUpdated = 1;
+        if (received_byte == CMD_MODE_CENTER ||
+            received_byte == CMD_MODE_CIRCLE ||
+            received_byte == CMD_MODE_CUSTOM) {
+            changeMode(received_byte);
+        } else {
+            newSector = (received_byte >> 4) & 0x0F;
+            currentVectorLength = received_byte & 0x0F;
+            if (g_currentMode == MODE_CENTER) {
+                sectorUpdated = 1;
+            }
         }
-    }
-    
-    // Circle 모드가 아닐 때만 다음 수신 대기
-    if (g_currentMode != MODE_CIRCLE) {
-        HAL_UART_Receive_IT(&huart2, g_RxBuff, 1);
+
+        HAL_UART_Receive_IT(&huart2, g_RxBuff, 1); // 항상 다시 활성화
     }
 }
+
 /* USER CODE END 0 */
 
 /**
@@ -291,23 +289,26 @@ int main(void)
         switch (g_currentMode) {
             case MODE_CENTER:
                 if(sectorUpdated) {
-                    updateSector(newSector);
+                    updateSectorCenterMode(newSector);
                 }
                 updateSpeed();
                 break;
-                
+
             case MODE_CIRCLE:
                 if (newSector != previousSector) {
-                    int targetRaw = (rawCounter + SECTOR_ANGLE_RAW) % (SECTOR_COUNT * SECTOR_ANGLE_RAW);
+                    int targetRaw = (rawCounter + SECTOR_ANGLE_RAW) % (SECTOR_COUNT * SECTOR_ANGLE_RAW); // 일단 순방향으로만 증가 가능(0구역 -> 1구역 은 되지만, 1구역 -> 0구역 은 안됨)
                     if (abs(rawCounter - targetRaw) > RAW_TOLERANCE) {
+                        // 이거 순방향으로 돌아야하는지 역방향으로 돌아야하는지 모름. 1층 모터와 2층 모터의 회전 방향에 따른 물체의 이동을 재확인하자 
                         rotateMotor(2, 1);
+                        printf("rotateMotor(2, 1)\r\n");
                     } else {
-                        stopMotors();
+                        stopMotor(2);  // 2층 모터만 정지
                         previousSector = newSector;
+                        printf("섹터별 회전각 조정 완료, 현재 섹터: %d\r\n", previousSector);
                     }
                 }
                 break;
-                
+
             case MODE_CUSTOM:
                 // 향후 구현
                 break;
