@@ -1,34 +1,35 @@
 /* USER CODE BEGIN Header */
 /**
- ******************************************************************************
- * @file           : main.c
- * @brief          : Main program body
- ******************************************************************************
- * @attention
- *
- * Copyright (c) 2025 STMicroelectronics.
- * All rights reserved.
- *
- * This software is licensed under terms that can be found in the LICENSE file
- * in the root directory of this software component.
- * If no LICENSE file comes with this software, it is provided AS-IS.
- *
- ******************************************************************************
- */
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
 /* USER CODE END Header */
 
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "tim.h"
 #include "usart.h"
+#include "usb_device.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <string.h>
-#include <stdlib.h>
-//#include "usbd_cdc_if.h"
+#include <stdbool.h>
+#include "usbd_cdc_if.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -36,26 +37,24 @@
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
-/* USER CODE BEGIN PD */
-// 섹터 관련 상수
-#define SECTOR_COUNT 6
-#define SECTOR_ANGLE_RAW 8  // 60도에 해당하는 raw counter 값
-#define RAW_TOLERANCE 4
 
-// 모드 관련 상수
-#define MODE_CENTER 1
-#define MODE_CIRCLE 2
-#define MODE_CUSTOM 3
 
-// UART 명령어 관련 상수
-#define CMD_MODE_CENTER 'c'
-#define CMD_MODE_CIRCLE 'r'
-#define CMD_MODE_CUSTOM 'm'
+//#define SECTOR0_RAW      0
+//#define SECTOR1_RAW      8
+//#define SECTOR2_RAW      16
+//#define SECTOR3_RAW      24
+//#define SECTOR4_RAW      32
+//#define SECTOR5_RAW      40
 
-// 모터 제어 관련 상수
-#define MOTOR_NEUTRAL 3150
-#define MOTOR_PWM_VALUE 3500
-#define MOTOR_REVERSE_VALUE 2800
+#define SECTOR0_RAW      0
+#define SECTOR1_RAW      40
+#define SECTOR2_RAW      32
+#define SECTOR3_RAW      24
+#define SECTOR4_RAW      16
+#define SECTOR5_RAW      8
+
+#define RAW_TOLERANCE    1
+#define MAX_VECTOR_LENGTH 9  // 최대 벡터 길이 (0-9)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -64,358 +63,313 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN PV */
-// UART 관련 변수
-uint8_t g_RxBuff[1];
+volatile uint8_t received_char;
 uint8_t received_byte;
+uint8_t g_RxBuff[1];
 
-// 섹터 관련 변수
-uint32_t rawCounter = 0;
-int currentSector = 0;
-int newSector = 0;
-int previousSector = -1;
+// 엔코더 카운터
+uint32_t rawCounter  = 0;
+uint32_t rawCounter2 = 0;
+uint32_t rawCounter3 = 0;
+uint32_t rawCounter4 = 0;
+uint32_t rawCounter5 = 0;
 
-// 모드 관련 변수
-uint8_t g_currentMode = MODE_CENTER;
-uint8_t targetMode;
-
-// 벡터 관련 변수
+// 섹터/벡터 길이
+int     currentSector       = 0;
+int     newSector           = 0;
 uint8_t currentVectorLength = 0;
-uint8_t sectorUpdated = 0;
+uint8_t sectorUpdated       = 0;
+
+// 일시정지
+uint8_t ispaused = 0;
+
+// 2층 모터 활성화 플래그 (5대)
+uint8_t twoMotorActive[5] = {0,0,0,0,0};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_NVIC_Init(void);
 /* USER CODE BEGIN PFP */
-void initMotors(void);
-void stopMotors(void);
 void stopMotor(int motorCh);
-void rotateForward(void);
-void rotateReverse(void);
-void rotateMotor(int motorCh, int direction);
-void updateSectorCenterMode(int targetSector);
-void updateSpeed(void);
-void changeMode(uint8_t cmd);
-
+void changeSector(int newSector);
+void changeSpeed(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-/* === 초기화 함수 === */
-void initMotors(void) {
-    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1); // 1층
-    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2); // 2층
-    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
-    HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL);
-}
-
-/* === 모터 제어 === */
-void stopMotors(void) {
-    stopMotor(1);
-    stopMotor(2);
-}
-
-void stopMotor(int motorCh) {
-    if (motorCh == 1)
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, MOTOR_NEUTRAL);
-    else if (motorCh == 2)
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, MOTOR_NEUTRAL);
-}
-
-void rotateForward(void) {
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, MOTOR_PWM_VALUE);
-}
-
-void rotateReverse(void) {
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, MOTOR_REVERSE_VALUE);
-}
-
-void rotateMotor(int motorCh, int direction) {
-    uint32_t pwmValue = (direction > 0) ? MOTOR_PWM_VALUE : MOTOR_REVERSE_VALUE;
-
-    if (motorCh == 1)
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pwmValue);
-    else if (motorCh == 2)
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pwmValue);
-}
-
-/* === 섹터 회전 === */
-void updateSectorCenterMode(int targetSector) {
-    if (currentSector == targetSector) return;
-
-    int forwardDiff = (targetSector - currentSector + SECTOR_COUNT) % SECTOR_COUNT;
-    int reverseDiff = (currentSector - targetSector + SECTOR_COUNT) % SECTOR_COUNT;
-
-    int direction = (forwardDiff <= reverseDiff) ? 1 : -1;
-    if (direction == 1) rotateForward();
-    else rotateReverse();
-
-    int targetRaw = targetSector * SECTOR_ANGLE_RAW;
-    if (abs((int)rawCounter - targetRaw) <= RAW_TOLERANCE) {
-        stopMotor(2);
-        currentSector = targetSector;
-        sectorUpdated = 0;
-    }
-}
-
-/* === 속도 제어 === */
-void updateSpeed(void) {
-    if (currentVectorLength > 3) {
-        uint32_t pwm = 3150 + (currentVectorLength * 117); // 3150~4200
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pwm);
-    } else {
-        stopMotor(1);
-    }
-}
-
-/* === 모드 전환 === */
-void changeMode(uint8_t cmd) {
-    printf("changeMode()\r\n");
-    
-    switch (cmd) {
-        case CMD_MODE_CENTER:
-            printf("CMD_MODE_CENTER\r\n");
-            targetMode = MODE_CENTER;
-            break;
-        case CMD_MODE_CIRCLE:
-            printf("CMD_MODE_CIRCLE\r\n");
-            targetMode = MODE_CIRCLE;
-            break;
-        case CMD_MODE_CUSTOM:
-            printf("CMD_MODE_CUSTOM\r\n");
-            targetMode = MODE_CUSTOM;
-            break;
-        default:
-            printf("Unknown Command: %d\r\n", cmd);
-            return;
-    }
-    
-    if (g_currentMode == targetMode) {
-        printf("이미 해당 모드입니다.\r\n");
-        return;
-    }
-    
-    printf("모드 전환: %d -> %d\r\n", g_currentMode, targetMode);
-
-    stopMotors();
-
-    switch (targetMode) {
-        case MODE_CENTER:
-            printf("CENTER 모드 시작\r\n");
-            sectorUpdated = 0;
-            break;
-        case MODE_CIRCLE:
-            printf("CIRCLE 모드 시작\r\n");
-            rotateMotor(1, 1);
-            previousSector = currentSector;
-            break;
-        case MODE_CUSTOM:
-            printf("CUSTOM 모드 시작\r\n");
-            break;
-    }
-    
-    g_currentMode = targetMode;
-    printf("모드 전환 완료\r\n");
-}
-
-/* === UART 수신 콜백 === */
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
-    if (huart->Instance == USART2) {
-        received_byte = g_RxBuff[0];
-
-        if (received_byte == CMD_MODE_CENTER ||
-            received_byte == CMD_MODE_CIRCLE ||
-            received_byte == CMD_MODE_CUSTOM) {
-            changeMode(received_byte);
-        } else {
-            newSector = (received_byte >> 4) & 0x0F;
-            currentVectorLength = received_byte & 0x0F;
-            if (g_currentMode == MODE_CENTER) {
-                sectorUpdated = 1;
-            }
-        }
-
-        HAL_UART_Receive_IT(&huart2, g_RxBuff, 1); // 항상 다시 활성화
-    }
-}
-
 /* USER CODE END 0 */
 
 /**
- * @brief  The application entry point.
- * @retval int
- */
+  * @brief  The application entry point.
+  * @retval int
+  */
 int main(void)
 {
-    /* USER CODE BEGIN 1 */
-    /* USER CODE END 1 */
+  HAL_Init();
+  SystemClock_Config();
+  MX_GPIO_Init();
+  MX_USART3_UART_Init();
+  MX_TIM1_Init();
+  MX_TIM2_Init();
+  MX_USB_DEVICE_Init();
+  MX_TIM3_Init();
+  MX_TIM4_Init();
+  MX_TIM5_Init();
+  MX_TIM8_Init();
+  MX_TIM9_Init();
+  MX_TIM12_Init();
+  MX_NVIC_Init();
 
-    /* MCU Configuration--------------------------------------------------------*/
+  // 1층 PWM
+  HAL_TIM_PWM_Start(&htim12, TIM_CHANNEL_1);
+  // 2층 PWM (5대)
+  HAL_TIM_PWM_Start(&htim5,  TIM_CHANNEL_2);
+  HAL_TIM_PWM_Start(&htim5,  TIM_CHANNEL_3);
+  HAL_TIM_PWM_Start(&htim5,  TIM_CHANNEL_4);
+  HAL_TIM_PWM_Start(&htim9,  TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim9,  TIM_CHANNEL_2);
 
-    /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-    HAL_Init();
+  // Encoder 시작
+  HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL);
+  HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
+  HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
+  HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
+  HAL_TIM_Encoder_Start(&htim8, TIM_CHANNEL_ALL);
 
-    /* USER CODE BEGIN Init */
-    /* USER CODE END Init */
+  // 카운터 초기화
+  __HAL_TIM_SET_COUNTER(&htim1, 0);
+  __HAL_TIM_SET_COUNTER(&htim2, 0);
+  __HAL_TIM_SET_COUNTER(&htim3, 0);
+  __HAL_TIM_SET_COUNTER(&htim4, 0);
+  __HAL_TIM_SET_COUNTER(&htim8, 0);
 
-    /* Configure the system clock */
-    SystemClock_Config();
+  while (1)
+  {
+    // 엔코더 값 갱신
+    rawCounter  = __HAL_TIM_GET_COUNTER(&htim1);
+    rawCounter2 = __HAL_TIM_GET_COUNTER(&htim2);
+    rawCounter3 = __HAL_TIM_GET_COUNTER(&htim3);
+    rawCounter4 = __HAL_TIM_GET_COUNTER(&htim4);
+    rawCounter5 = __HAL_TIM_GET_COUNTER(&htim8);
 
-    /* USER CODE BEGIN SysInit */
-    /* USER CODE END SysInit */
-
-    /* Initialize all configured peripherals */
-    MX_GPIO_Init();
-    MX_USART2_UART_Init();
-    MX_TIM1_Init();
-    MX_TIM2_Init();
-    MX_TIM3_Init();
-
-    /* Initialize interrupts */
-    MX_NVIC_Init();
-
-    /* USER CODE BEGIN 2 */
-    initMotors();
-    HAL_UART_Receive_IT(&huart2, g_RxBuff, 1);
-    printf("main init\r\n");
-    /* USER CODE END 2 */
-
-    /* Infinite loop */
-    /* USER CODE BEGIN WHILE */
-    while (1)
-    {
-        rawCounter = __HAL_TIM_GET_COUNTER(&htim1);
-
-        switch (g_currentMode) {
-            case MODE_CENTER:
-                if(sectorUpdated) {
-                    updateSectorCenterMode(newSector);
-                }
-                updateSpeed();
-                break;
-
-            case MODE_CIRCLE:
-                if (newSector != previousSector) {
-                    int targetRaw = (rawCounter + SECTOR_ANGLE_RAW) % (SECTOR_COUNT * SECTOR_ANGLE_RAW); // 일단 순방향으로만 증가 가능(0구역 -> 1구역 은 되지만, 1구역 -> 0구역 은 안됨)
-                    if (abs(rawCounter - targetRaw) > RAW_TOLERANCE) {
-                        // 이거 순방향으로 돌아야하는지 역방향으로 돌아야하는지 모름. 1층 모터와 2층 모터의 회전 방향에 따른 물체의 이동을 재확인하자 
-                        rotateMotor(2, 1);
-                        printf("rotateMotor(2, 1)\r\n");
-                    } else {
-                        stopMotor(2);  // 2층 모터만 정지
-                        previousSector = newSector;
-                        printf("섹터별 회전각 조정 완료, 현재 섹터: %d\r\n", previousSector);
-                    }
-                }
-                break;
-
-            case MODE_CUSTOM:
-                // 향후 구현
-                break;
-        }
-        /* USER CODE END WHILE */
-
-        /* USER CODE BEGIN 3 */
+    // 리셋 (PC2)
+    if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_2) == GPIO_PIN_RESET) {
+      ispaused = 0;
+      __HAL_TIM_SET_COUNTER(&htim1, 0);
+      __HAL_TIM_SET_COUNTER(&htim2, 0);
+      __HAL_TIM_SET_COUNTER(&htim3, 0);
+      __HAL_TIM_SET_COUNTER(&htim4, 0);
+      __HAL_TIM_SET_COUNTER(&htim8, 0);
     }
-    /* USER CODE END 3 */
+
+    // 일시정지 (PC1)
+    if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_1) == GPIO_PIN_RESET) {
+      ispaused = 1;
+    }
+
+    // 일시정지 모드: 수동 버튼 제어
+    if (ispaused) {
+      stopMotor(1);
+      stopMotor(2);
+      // 1열~5열 버튼(PE13,14,15, PB10, PB11)
+      __HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_2,
+        HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_13)==GPIO_PIN_RESET ? 3700 : 0);
+      __HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_3,
+        HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_14)==GPIO_PIN_RESET ? 3700 : 0);
+      __HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_4,
+        HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_15)==GPIO_PIN_RESET ? 3700 : 0);
+      __HAL_TIM_SET_COMPARE(&htim9, TIM_CHANNEL_1,
+        HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_10)==GPIO_PIN_RESET ? 3700 : 0);
+      __HAL_TIM_SET_COMPARE(&htim9, TIM_CHANNEL_2,
+        HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_11)==GPIO_PIN_RESET ? 3700 : 0);
+      continue;
+    }
+    // 섹터 이동 명령
+    else if (sectorUpdated) {
+      changeSector(newSector);
+    }
+
+    // 1층 속도 조절
+    changeSpeed();
+  }
 }
 
 /**
- * @brief System Clock Configuration
- * @retval None
- */
+  * @brief System Clock Configuration
+  * @retval None
+  */
 void SystemClock_Config(void)
 {
-    /* USER CODE BEGIN SystemClock_Config */
-    RCC_OscInitTypeDef RCC_OscInitStruct = {0};
-    RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
-    /** Configure the main internal regulator output voltage
-     */
-    __HAL_RCC_PWR_CLK_ENABLE();
-    __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+  __HAL_RCC_PWR_CLK_ENABLE();
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
-    /** Initializes the RCC Oscillators according to the specified parameters
-     * in the RCC_OscInitTypeDef structure.
-     */
-    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-    RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-    RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-    RCC_OscInitStruct.PLL.PLLM = 4;
-    RCC_OscInitStruct.PLL.PLLN = 168;
-    RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV4;
-    RCC_OscInitStruct.PLL.PLLQ = 7;
-    if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-    {
-        Error_Handler();
-    }
+  RCC_OscInitStruct.OscillatorType      = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState            = RCC_HSE_ON;
+  RCC_OscInitStruct.PLL.PLLState        = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource       = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLM            = 4;
+  RCC_OscInitStruct.PLL.PLLN            = 168;
+  RCC_OscInitStruct.PLL.PLLP            = RCC_PLLP_DIV2;
+  RCC_OscInitStruct.PLL.PLLQ            = 7;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
+    Error_Handler();
+  }
 
-    /** Initializes the CPU, AHB and APB buses clocks
-     */
-    RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                                |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
-    RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-    RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
-    RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
-
-    if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
-    {
-        Error_Handler();
-    }
-    /* USER CODE END SystemClock_Config */
+  RCC_ClkInitStruct.ClockType           = RCC_CLOCKTYPE_HCLK   |
+                                          RCC_CLOCKTYPE_SYSCLK |
+                                          RCC_CLOCKTYPE_PCLK1  |
+                                          RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource        = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider       = RCC_SYSCLK_DIV2;
+  RCC_ClkInitStruct.APB1CLKDivider      = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider      = RCC_HCLK_DIV1;
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK) {
+    Error_Handler();
+  }
 }
 
 /**
- * @brief NVIC Configuration.
- * @retval None
- */
+  * @brief NVIC Configuration
+  * @retval None
+  */
 static void MX_NVIC_Init(void)
 {
-    /* USER CODE BEGIN NVIC_Init */
-    /* USART2_IRQn interrupt configuration */
-    HAL_NVIC_SetPriority(USART2_IRQn, 0, 0);
-    HAL_NVIC_EnableIRQ(USART2_IRQn);
-    /* USER CODE END NVIC_Init */
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn,       0, 0);
+  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+  HAL_NVIC_SetPriority(TIM1_BRK_TIM9_IRQn,   0, 0);
+  HAL_NVIC_EnableIRQ(TIM1_BRK_TIM9_IRQn);
+  HAL_NVIC_SetPriority(TIM2_IRQn,            0, 0);
+  HAL_NVIC_EnableIRQ(TIM2_IRQn);
+  HAL_NVIC_SetPriority(TIM3_IRQn,            0, 0);
+  HAL_NVIC_EnableIRQ(TIM3_IRQn);
+  HAL_NVIC_SetPriority(TIM4_IRQn,            0, 0);
+  HAL_NVIC_EnableIRQ(TIM4_IRQn);
+  HAL_NVIC_SetPriority(TIM8_BRK_TIM12_IRQn,  0, 0);
+  HAL_NVIC_EnableIRQ(TIM8_BRK_TIM12_IRQn);
 }
 
 /* USER CODE BEGIN 4 */
-int __io_putchar(int ch)
+/**
+  * @brief  구역 변경 (2층 개별 모터 제어)
+  */
+void changeSector(int newSector)
 {
-    HAL_UART_Transmit(&huart2, (uint8_t*)&ch, 1, 100);
-    return 0;
+  static const uint32_t sectorRaw[6] = {
+    SECTOR0_RAW, SECTOR1_RAW, SECTOR2_RAW,
+    SECTOR3_RAW, SECTOR4_RAW, SECTOR5_RAW
+  };
+
+  int32_t forwardDiff = (newSector - currentSector + 6) % 6;
+  int32_t reverseDiff = (currentSector - newSector + 6) % 6;
+  bool useReverse = (forwardDiff <= reverseDiff);
+
+  TIM_HandleTypeDef* htimList[5] = {
+    &htim5, &htim5, &htim5, &htim9, &htim9
+  };
+  uint32_t chList[5] = {
+    TIM_CHANNEL_2, TIM_CHANNEL_3, TIM_CHANNEL_4,
+    TIM_CHANNEL_1, TIM_CHANNEL_2
+  };
+  uint32_t counters[5] = {
+    rawCounter, rawCounter2, rawCounter3,
+    rawCounter4, rawCounter5
+  };
+
+  uint16_t pwmVal = useReverse ? 3650 : 2650;
+  // 회전
+  for (int i = 0; i < 5; i++) {
+    if (twoMotorActive[i])
+      __HAL_TIM_SET_COMPARE(htimList[i], chList[i], pwmVal);
+  }
+  // 도착 시 정지
+  for (int i = 0; i < 5; i++) {
+    if (twoMotorActive[i] &&
+        ((uint32_t)abs((int32_t)counters[i] - (int32_t)sectorRaw[newSector])) <= RAW_TOLERANCE)
+    {
+      __HAL_TIM_SET_COMPARE(htimList[i], chList[i], 0);
+      twoMotorActive[i] = 0;
+    }
+  }
+  // 완료 체크
+  bool any = false;
+  for (int i = 0; i < 5; i++) {
+    if (twoMotorActive[i]) { any = true; break; }
+  }
+  if (!any) {
+    currentSector = newSector;
+    sectorUpdated  = 0;
+  }
 }
+
+/**
+  * @brief  1층 속도 제어
+  */
+void changeSpeed(void)
+{
+  uint32_t pwm_value = 3150;
+  if (currentVectorLength >= 1) {
+    pwm_value = 3150 + (currentVectorLength * 117);
+    __HAL_TIM_SET_COMPARE(&htim12, TIM_CHANNEL_1, pwm_value);
+  } else {
+    stopMotor(1);
+  }
+}
+
+/**
+  * @brief  모터 정지
+  */
+void stopMotor(int motorCh)
+{
+  if (motorCh == 1) {
+    __HAL_TIM_SET_COMPARE(&htim12, TIM_CHANNEL_1, 0);
+  } else {
+    __HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_2, 0);
+    __HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_3, 0);
+    __HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_4, 0);
+    __HAL_TIM_SET_COMPARE(&htim9, TIM_CHANNEL_1, 0);
+    __HAL_TIM_SET_COMPARE(&htim9, TIM_CHANNEL_2, 0);
+  }
+}
+
+/**
+  * @brief  USB CDC 수신 콜백
+  */
+void CDC_ReceiveCallback(uint8_t *buf, uint32_t len)
+{
+  if (len > 0) {
+    received_byte = buf[0];
+    newSector = (received_byte >> 4) & 0x0F;
+    currentVectorLength = received_byte & 0x0F;
+    for (int i = 0; i < 5; i++) twoMotorActive[i] = 1;
+    sectorUpdated = 1;
+  }
+}
+
 /* USER CODE END 4 */
 
 /**
- * @brief  This function is executed in case of error occurrence.
- * @retval None
- */
+  * @brief  Error Handler
+  * @retval None
+  */
 void Error_Handler(void)
 {
-    /* USER CODE BEGIN Error_Handler_Debug */
-    /* User can add his own implementation to report the HAL error return state */
-    __disable_irq();
-    while (1)
-    {
-    }
-    /* USER CODE END Error_Handler_Debug */
+  __disable_irq();
+  while (1) { }
 }
 
-#ifdef  USE_FULL_ASSERT
+#ifdef USE_FULL_ASSERT
 /**
- * @brief  Reports the name of the source file and the source line number
- *         where the assert_param error has occurred.
- * @param  file: pointer to the source file name
- * @param  line: assert_param error line source number
- * @retval None
- */
+  * @brief  Reports the name of the source file and the source line number
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param line source number
+  * @retval None
+  */
 void assert_failed(uint8_t *file, uint32_t line)
 {
-    /* USER CODE BEGIN 6 */
-    /* User can add his own implementation to report the file name and line number,
-       ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-    /* USER CODE END 6 */
+  /* User can add debug print here */
 }
 #endif /* USE_FULL_ASSERT */
